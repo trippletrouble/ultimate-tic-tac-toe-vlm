@@ -14,6 +14,8 @@ if 'data' not in st.session_state:
     st.session_state.data = []
 if 'modified' not in st.session_state:
     st.session_state.modified = False
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = ""
 
 
 def load_data():
@@ -48,12 +50,88 @@ def format_board_state(global_state):
     return board
 
 
+def generate_prompt(entry):
+    """Generate a prompt for Gemini based on the current game state."""
+    # Format board state
+    board = format_board_state(entry["global state"])
+    board_text = ""
+    for i, row in enumerate(board):
+        if i > 0 and i % 3 == 0:
+            board_text += "---+---+---\n"
+        row_str = ""
+        for j, cell in enumerate(row):
+            if j > 0 and j % 3 == 0:
+                row_str += "|"
+            symbol = "." if cell == 0 else ("X" if cell == 1 else "O")
+            row_str += symbol
+        board_text += row_str + "\n"
+
+    # Get player info
+    player_symbol = 'X' if entry['player'] == 1 else 'O'
+
+    # Get best move
+    best_move = entry["best move"]
+    best_move_str = f"Global({best_move['global_row']}, {best_move['global_col']}) Local({best_move['local_row']}, {best_move['local_col']})"
+
+    # Get allowed squares
+    allowed = entry.get("allowed squares")
+    allowed_str = f"({allowed[0]}, {allowed[1]})" if allowed else "Any"
+
+    # Build the prompt
+    prompt = f"""You are an expert Ultimate Tic-Tac-Toe player analyzing a game position.
+
+Current Board State (9x9):
+{board_text}
+
+Player: {entry['player']} ({player_symbol})
+Allowed Square: {allowed_str}
+Best Move: {best_move_str}
+
+Please provide a detailed chain of thought explaining why this move is the best choice. Include:
+1. Analysis of the current board state
+2. Identification of immediate threats and opportunities
+3. Strategic reasoning behind this specific move
+4. How this move affects future gameplay
+5. Why this move is better than alternatives
+
+Provide your analysis in a clear, structured format."""
+
+    return prompt
+
+
+def get_gemini_suggestion(prompt, api_key):
+    """Get suggestion from Gemini API."""
+    import google.generativeai as genai
+
+    try:
+        genai.configure(api_key=***ENTFERNT***
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 # Load data
 if not st.session_state.data:
     st.session_state.data = load_data()
 
 # Title
-st.title("🎮 Ultimate Tic-Tac-Toe Chain of Thought Editor")
+st.title("🎮 Ultimate Tic-Tac-Toe Chain of Thought Editor with Gemini")
+
+# Sidebar - API Key
+st.sidebar.header("🔑 Gemini API Configuration")
+st.session_state.api_key = ***ENTFERNT***
+    "Gemini API Key",
+    value=st.session_state.api_key,
+    type="password",
+    help="Enter your Google Gemini API key"
+)
+
+if st.session_state.api_key:
+    st.sidebar.success("✅ API Key configured")
+else:
+    st.sidebar.warning("⚠️ Please enter your API key")
 
 # Check if data exists
 if not st.session_state.data:
@@ -133,7 +211,7 @@ with col_left:
     if os.path.exists(image_path):
         st.image(image_path, use_container_width=True)
     else:
-        st.error(f"Image not found: {image_path}")
+        st.warning("Image not found")
 
     # Game info
     st.write(f"**Player:** {current_entry['player']} ({'X' if current_entry['player'] == 1 else 'O'})")
@@ -159,19 +237,67 @@ with col_left:
 with col_right:
     st.subheader("🧠 Chain of Thought")
 
-    # Text area for chain of thought
-    chain_of_thought = st.text_area(
-        "Enter reasoning for this move:",
-        value=current_entry.get("chain of thought", ""),
-        height=300,
-        placeholder="Explain the strategic reasoning behind this move...\n\nExample:\n- Analyze the current board state\n- Identify threats and opportunities\n- Explain why this move is optimal\n- Consider future implications"
+    # Chain of Thought section
+    st.divider()
+    st.subheader("💭 Chain of Thought")
+
+    col_gen, col_auto = st.columns([3, 1])
+
+    with col_gen:
+        if st.button("🤖 Generate with Gemini", use_container_width=True):
+            if not st.session_state.api_key:
+                st.error("Please enter your Gemini API Key in the sidebar")
+            else:
+                with st.spinner("Generating chain of thought..."):
+                    prompt = generate_prompt(current_entry)
+                    suggestion = get_gemini_suggestion(prompt, st.session_state.api_key)
+                    st.session_state.data[st.session_state.current_index]["chain of thought"] = suggestion
+                    st.session_state.modified = True
+                    st.rerun()
+
+    with col_auto:
+        if st.button("⚡ Auto-fill Empty", use_container_width=True):
+            if not st.session_state.api_key:
+                st.error("Please enter API Key")
+            else:
+                empty_indices = [i for i, e in enumerate(st.session_state.data)
+                                 if not e.get("chain of thought", "").strip()]
+
+                if not empty_indices:
+                    st.info("All entries have chain of thought!")
+                else:
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+
+                    for idx, i in enumerate(empty_indices):
+                        status_text.text(f"Processing {idx + 1}/{len(empty_indices)}...")
+                        prompt = generate_prompt(st.session_state.data[i])
+                        suggestion = get_gemini_suggestion(prompt, st.session_state.api_key)
+                        st.session_state.data[i]["chain of thought"] = suggestion
+                        progress_bar.progress((idx + 1) / len(empty_indices))
+
+                    st.session_state.modified = True
+                    status_text.text("Done!")
+                    st.success(f"Generated {len(empty_indices)} chain of thoughts!")
+                    st.rerun()
+
+    # Edit chain of thought
+    current_cot = current_entry.get("chain of thought", "")
+    new_cot = st.text_area(
+        "Edit Chain of Thought",
+        value=current_cot,
+        height=150,
+        help="Edit or review the generated chain of thought"
     )
 
-    # Update button
-    if st.button("✅ Update Chain of Thought", type="primary"):
-        st.session_state.data[st.session_state.current_index]["chain of thought"] = chain_of_thought
+    if new_cot != current_cot:
+        st.session_state.data[st.session_state.current_index]["chain of thought"] = new_cot
         st.session_state.modified = True
-        st.success("Updated! Don't forget to save.")
+        st.info("Modified (remember to save)")
+
+    # Show prompt preview
+    with st.expander("🔍 View Gemini Prompt"):
+        st.code(generate_prompt(current_entry), language=None)
 
     # Show if modified
     if st.session_state.modified:
